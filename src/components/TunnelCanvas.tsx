@@ -2,10 +2,11 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
+import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import { SHOWCASE_PAIRS, ProductItem } from '@/data/fashionData';
 
 interface TunnelCanvasProps {
-  scrollProgress: number;
+  scrollProgress: number; // 0.0 to 1.0
   onSelectProduct: (product: ProductItem) => void;
   activeFrameIndex: number;
 }
@@ -15,13 +16,17 @@ export default function TunnelCanvas({
   onSelectProduct,
 }: TunnelCanvasProps) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const targetCamZ = useRef<number>(8.0);
-  const currentCamZ = useRef<number>(8.0);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const targetCamZ = useRef<number>(11.0);
+  const currentCamZ = useRef<number>(11.0);
   const alcovesRef = useRef<{ mesh: THREE.Object3D; product: ProductItem }[]>([]);
+  const hoveredProductRef = useRef<ProductItem | null>(null);
 
-  // Map scroll progress to camera Z
+  // Map scroll progress (0.0 to 1.0) to camera travel down the hallway
   useEffect(() => {
-    const startZ = 8.0;
+    const startZ = 11.0;
     const endZ = -68.0;
     targetCamZ.current = startZ + (endZ - startZ) * scrollProgress;
   }, [scrollProgress]);
@@ -30,392 +35,380 @@ export default function TunnelCanvas({
     const container = mountRef.current;
     if (!container) return;
 
-    // ====== SCENE ======
+    // 1. Scene setup with warm atmospheric dark tone
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0c0806);
-    scene.fog = new THREE.Fog(0x0c0806, 30, 90);
+    sceneRef.current = scene;
+    scene.background = new THREE.Color(0x0e0a08);
+    scene.fog = new THREE.FogExp2(0x0e0a08, 0.016);
 
+    // 2. Camera setup - centered perspective hallway
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
+    const camera = new THREE.PerspectiveCamera(54, width / height, 0.1, 180);
+    camera.position.set(0, 0.15, 11.0);
+    camera.lookAt(0, 0.15, -40);
+    cameraRef.current = camera;
 
-    // ====== CAMERA ======
-    const camera = new THREE.PerspectiveCamera(58, width / height, 0.1, 200);
-    camera.position.set(0, 0.6, 8.0);
-    camera.lookAt(0, 0.4, -50);
-
-    // ====== RENDERER ======
+    // 3. WebGL Renderer
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
       powerPreference: 'high-performance',
+      antialias: true,
+      alpha: false,
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.4;
+    renderer.toneMappingExposure = 1.25;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
+    rendererRef.current = renderer;
 
-    const textureLoader = new THREE.TextureLoader();
+    // 4. Ambient and Key Lighting
+    // Warm dark amber ambient illumination for architectural richness
+    const ambientLight = new THREE.AmbientLight(0x35251c, 1.4);
+    scene.add(ambientLight);
 
-    // ====== MATERIALS ======
-    // Dark espresso brown wall material
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0x1a120d,
-      roughness: 0.7,
-      metalness: 0.15,
-    });
-    // Darker structural beam material
-    const beamMat = new THREE.MeshStandardMaterial({
-      color: 0x130d09,
-      roughness: 0.5,
-      metalness: 0.2,
-    });
-    // Ceiling material - warm dark espresso brown (NOT black)
-    const ceilingMat = new THREE.MeshStandardMaterial({
-      color: 0x1e1510,
-      roughness: 0.65,
-      metalness: 0.1,
-    });
-    // Floor material - dark polished
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: 0x120e0a,
-      roughness: 0.15,
-      metalness: 0.85,
-      envMapIntensity: 0.8,
-    });
-    // Frame material for display alcoves
-    const frameMat = new THREE.MeshStandardMaterial({
-      color: 0x1c1410,
-      roughness: 0.4,
-      metalness: 0.3,
-    });
-    // Red neon emissive - SUBTLE, not overpowering
-    const redEmissiveMat = new THREE.MeshStandardMaterial({
-      color: 0xff2211,
-      emissive: 0xff2211,
-      emissiveIntensity: 0.7,
-      roughness: 0.3,
-    });
-    // Amber/golden neon emissive - warm golden
-    const amberEmissiveMat = new THREE.MeshStandardMaterial({
-      color: 0xffaa22,
-      emissive: 0xffaa22,
-      emissiveIntensity: 0.6,
-      roughness: 0.3,
-    });
-    // Warm white ceiling light strip
-    const warmLightMat = new THREE.MeshStandardMaterial({
-      color: 0xffeedd,
-      emissive: 0xffe8cc,
-      emissiveIntensity: 0.4,
-      roughness: 0.2,
-    });
-    // Golden frame border glow
-    const goldBorderMat = new THREE.MeshStandardMaterial({
-      color: 0xdaa520,
-      emissive: 0xdaa520,
-      emissiveIntensity: 0.5,
-      roughness: 0.3,
-    });
-    // Ivory backdrop for displays
-    const ivoryMat = new THREE.MeshBasicMaterial({
-      color: 0xfff5e6,
-    });
+    // Warm overhead directional light
+    const dirLight = new THREE.DirectionalLight(0xffecd0, 1.2);
+    dirLight.position.set(0, 8, 4);
+    scene.add(dirLight);
 
-    // ====== TUNNEL DIMENSIONS ======
-    const tunnelLength = 120;
-    const tunnelHalfW = 5.5; // half-width of corridor
-    const tunnelHeight = 4.5;
-    const floorY = -2.2;
-    const ceilingY = floorY + tunnelHeight; // 2.3
-    const tunnelCenterZ = -40;
+    // 5. Polished Mirror Floor (Reflector)
+    const floorWidth = 20;
+    const floorLength = 110;
+    const floorCenterZ = -35;
+    const floorGeo = new THREE.PlaneGeometry(floorWidth, floorLength);
 
-    // ====== FLOOR ======
-    const floorGeo = new THREE.PlaneGeometry(tunnelHalfW * 2, tunnelLength);
-    const floor = new THREE.Mesh(floorGeo, floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, floorY, tunnelCenterZ);
-    floor.receiveShadow = true;
-    scene.add(floor);
+    try {
+      const reflector = new Reflector(floorGeo, {
+        clipBias: 0.003,
+        textureWidth: Math.min(width * window.devicePixelRatio, 1024),
+        textureHeight: Math.min(height * window.devicePixelRatio, 1024),
+        color: 0x140e0b, // Dark warm espresso tint
+      });
+      reflector.rotation.x = -Math.PI / 2;
+      reflector.position.set(0, -2.1, floorCenterZ);
+      scene.add(reflector);
+    } catch {
+      // Fallback specular material if Reflector fails
+      const floorMat = new THREE.MeshStandardMaterial({
+        color: 0x120d0a,
+        roughness: 0.08,
+        metalness: 0.85,
+      });
+      const floor = new THREE.Mesh(floorGeo, floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(0, -2.1, floorCenterZ);
+      scene.add(floor);
+    }
 
-    // Floor center line - subtle
-    const centerLineGeo = new THREE.PlaneGeometry(0.02, tunnelLength);
+    // Floor Center Subtle Seam / Guide Line
+    const centerLineGeo = new THREE.PlaneGeometry(0.04, floorLength);
     const centerLineMat = new THREE.MeshBasicMaterial({
-      color: 0x3d2e22,
+      color: 0x8a6d54,
       transparent: true,
-      opacity: 0.3,
+      opacity: 0.35,
     });
     const centerLine = new THREE.Mesh(centerLineGeo, centerLineMat);
     centerLine.rotation.x = -Math.PI / 2;
-    centerLine.position.set(0, floorY + 0.001, tunnelCenterZ);
+    centerLine.position.set(0, -2.09, floorCenterZ);
     scene.add(centerLine);
 
-    // ====== CEILING ======
-    const ceilGeo = new THREE.PlaneGeometry(tunnelHalfW * 2, tunnelLength);
-    const ceiling = new THREE.Mesh(ceilGeo, ceilingMat);
-    ceiling.rotation.x = Math.PI / 2;
-    ceiling.position.set(0, ceilingY, tunnelCenterZ);
-    scene.add(ceiling);
+    // 6. Glowing Floor Curbs & Rails (Golden Amber + Neon Red)
+    // Run along the corridor in front of the camera (from z = 10.5 down to z = -80)
+    const corridorLength = 91; // from z = 10.5 to z = -80.5
+    const corridorCenterZ = (10.5 + -80.5) / 2; // -35
 
-    // ====== SIDE WALLS ======
-    // Continuous dark brown side walls
-    const sideWallGeo = new THREE.PlaneGeometry(tunnelLength, tunnelHeight);
-    // Left wall
-    const leftWall = new THREE.Mesh(sideWallGeo, wallMat);
-    leftWall.rotation.y = Math.PI / 2;
-    leftWall.position.set(-tunnelHalfW, floorY + tunnelHeight / 2, tunnelCenterZ);
-    scene.add(leftWall);
-    // Right wall
-    const rightWall = new THREE.Mesh(sideWallGeo, wallMat);
-    rightWall.rotation.y = -Math.PI / 2;
-    rightWall.position.set(tunnelHalfW, floorY + tunnelHeight / 2, tunnelCenterZ);
-    scene.add(rightWall);
-
-    // ====== LIGHTING ======
-    // Warm ambient fill
-    const ambientLight = new THREE.AmbientLight(0x3d2a1a, 2.0);
-    scene.add(ambientLight);
-
-    // Key light - warm overhead
-    const keyLight = new THREE.DirectionalLight(0xffeedd, 0.8);
-    keyLight.position.set(0, 8, 5);
-    scene.add(keyLight);
-
-    // Warm fill from floor
-    const fillLight = new THREE.DirectionalLight(0xffcc88, 0.3);
-    fillLight.position.set(0, -2, 0);
-    scene.add(fillLight);
-
-    // ====== REPEATING ARCHITECTURAL FRAMES (the perspective-enhancing arch structures) ======
-    const framePositions = [8, 2, -4, -10, -16, -22, -28, -34, -40, -46, -52, -58, -64, -70, -76];
-
-    framePositions.forEach((zPos) => {
-      // Vertical structural columns on each side (close to walls)
-      const columnW = 0.35;
-      const columnGeo = new THREE.BoxGeometry(columnW, tunnelHeight, 0.5);
-
-      // Left column
-      const leftCol = new THREE.Mesh(columnGeo, beamMat);
-      leftCol.position.set(-tunnelHalfW + columnW / 2 + 0.05, floorY + tunnelHeight / 2, zPos);
-      scene.add(leftCol);
-
-      // Right column
-      const rightCol = new THREE.Mesh(columnGeo, beamMat);
-      rightCol.position.set(tunnelHalfW - columnW / 2 - 0.05, floorY + tunnelHeight / 2, zPos);
-      scene.add(rightCol);
-
-      // Ceiling cross-beam
-      const crossBeamGeo = new THREE.BoxGeometry(tunnelHalfW * 2, 0.35, 0.5);
-      const crossBeam = new THREE.Mesh(crossBeamGeo, beamMat);
-      crossBeam.position.set(0, ceilingY - 0.18, zPos);
-      scene.add(crossBeam);
-
-      // Warm ceiling light strip (recessed under beam)
-      const ceilLightGeo = new THREE.BoxGeometry(tunnelHalfW * 1.2, 0.03, 0.12);
-      const ceilLight = new THREE.Mesh(ceilLightGeo, warmLightMat);
-      ceilLight.position.set(0, ceilingY - 0.37, zPos);
-      scene.add(ceilLight);
-
-      // Small RED accent strips at beam-wall junction (subtle, thin)
-      const redAccentGeo = new THREE.BoxGeometry(0.03, 0.06, 0.35);
-      // Left red accent at column top
-      const leftRedTop = new THREE.Mesh(redAccentGeo, redEmissiveMat);
-      leftRedTop.position.set(-tunnelHalfW + 0.15, ceilingY - 0.5, zPos);
-      scene.add(leftRedTop);
-      // Right red accent at column top
-      const rightRedTop = new THREE.Mesh(redAccentGeo, redEmissiveMat);
-      rightRedTop.position.set(tunnelHalfW - 0.15, ceilingY - 0.5, zPos);
-      scene.add(rightRedTop);
-
-      // Point light at each beam for warm illumination (sparse - every other beam)
-      if (zPos % 12 === 0 || zPos % 10 === 0) {
-        const beamPointLight = new THREE.PointLight(0xffcc88, 1.5, 12, 1.5);
-        beamPointLight.position.set(0, ceilingY - 0.5, zPos);
-        scene.add(beamPointLight);
-      }
+    const redNeonMat = new THREE.MeshBasicMaterial({ color: 0xff1e0e });
+    const yellowNeonMat = new THREE.MeshBasicMaterial({ color: 0xffa800 });
+    const curbMat = new THREE.MeshStandardMaterial({
+      color: 0x1b130f,
+      roughness: 0.55,
+      metalness: 0.3,
     });
 
-    // ====== CONTINUOUS FLOOR-LEVEL LIGHT STRIPS (Red + Amber) ======
-    // These run along the inner wall-floor junction — THIN and elegant
-    const stripLength = tunnelLength;
-    const stripZ = tunnelCenterZ;
+    // Dark curb structural plinths
+    const curbGeo = new THREE.BoxGeometry(0.5, 0.16, corridorLength);
+    const leftCurb = new THREE.Mesh(curbGeo, curbMat);
+    leftCurb.position.set(-3.55, -2.02, corridorCenterZ);
+    scene.add(leftCurb);
 
-    // Red strip — inner floor edge (thin!)
-    const redStripGeo = new THREE.BoxGeometry(0.04, 0.03, stripLength);
-    const leftRedFloor = new THREE.Mesh(redStripGeo, redEmissiveMat);
-    leftRedFloor.position.set(-tunnelHalfW + 0.6, floorY + 0.015, stripZ);
-    scene.add(leftRedFloor);
-    const rightRedFloor = new THREE.Mesh(redStripGeo, redEmissiveMat);
-    rightRedFloor.position.set(tunnelHalfW - 0.6, floorY + 0.015, stripZ);
-    scene.add(rightRedFloor);
+    const rightCurb = new THREE.Mesh(curbGeo, curbMat);
+    rightCurb.position.set(3.55, -2.02, corridorCenterZ);
+    scene.add(rightCurb);
 
-    // Amber/gold strip — slightly further out along curb
-    const amberStripGeo = new THREE.BoxGeometry(0.05, 0.025, stripLength);
-    const leftAmberFloor = new THREE.Mesh(amberStripGeo, amberEmissiveMat);
-    leftAmberFloor.position.set(-tunnelHalfW + 0.3, floorY + 0.013, stripZ);
-    scene.add(leftAmberFloor);
-    const rightAmberFloor = new THREE.Mesh(amberStripGeo, amberEmissiveMat);
-    rightAmberFloor.position.set(tunnelHalfW - 0.3, floorY + 0.013, stripZ);
-    scene.add(rightAmberFloor);
+    // Horizontal glowing strips on floor curbs
+    // Inner Red Neon Strip
+    const floorRedGeo = new THREE.BoxGeometry(0.06, 0.05, corridorLength);
+    const leftFloorRed = new THREE.Mesh(floorRedGeo, redNeonMat);
+    leftFloorRed.position.set(-3.25, -2.06, corridorCenterZ);
+    scene.add(leftFloorRed);
 
-    // Upper wall red accent lines (very thin, running along wall-ceiling junction)
-    const upperRedGeo = new THREE.BoxGeometry(0.025, 0.025, stripLength);
-    const leftUpperRed = new THREE.Mesh(upperRedGeo, redEmissiveMat);
-    leftUpperRed.position.set(-tunnelHalfW + 0.05, ceilingY - 0.08, stripZ);
+    const rightFloorRed = new THREE.Mesh(floorRedGeo, redNeonMat);
+    rightFloorRed.position.set(3.25, -2.06, corridorCenterZ);
+    scene.add(rightFloorRed);
+
+    // Outer Golden Amber Neon Strip
+    const floorYellowGeo = new THREE.BoxGeometry(0.08, 0.07, corridorLength);
+    const leftFloorYellow = new THREE.Mesh(floorYellowGeo, yellowNeonMat);
+    leftFloorYellow.position.set(-3.4, -2.03, corridorCenterZ);
+    scene.add(leftFloorYellow);
+
+    const rightFloorYellow = new THREE.Mesh(floorYellowGeo, yellowNeonMat);
+    rightFloorYellow.position.set(3.4, -2.03, corridorCenterZ);
+    scene.add(rightFloorYellow);
+
+    // 7. ARCHITECTURAL LUXURY CEILING MATCHING REFERENCE
+    // Solid warm espresso/bronze coffered ceiling plane directly meeting tops of alcoves
+    const ceilingY = 2.82;
+    const ceilingWidth = 8.4;
+    const ceilingGeo = new THREE.PlaneGeometry(ceilingWidth, corridorLength);
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0x1a130f, // Rich warm espresso tone
+      roughness: 0.5,
+      metalness: 0.2,
+    });
+    const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
+    ceiling.rotation.x = Math.PI / 2;
+    ceiling.position.set(0, ceilingY, corridorCenterZ);
+    scene.add(ceiling);
+
+    // Upper Longitudinal Light Coves (Top Left and Top Right Corners)
+    // Red neon strip running down ceiling-wall edge
+    const upperRedGeo = new THREE.BoxGeometry(0.06, 0.05, corridorLength);
+    const leftUpperRed = new THREE.Mesh(upperRedGeo, redNeonMat);
+    leftUpperRed.position.set(-3.65, ceilingY - 0.03, corridorCenterZ);
     scene.add(leftUpperRed);
-    const rightUpperRed = new THREE.Mesh(upperRedGeo, redEmissiveMat);
-    rightUpperRed.position.set(tunnelHalfW - 0.05, ceilingY - 0.08, stripZ);
+
+    const rightUpperRed = new THREE.Mesh(upperRedGeo, redNeonMat);
+    rightUpperRed.position.set(3.65, ceilingY - 0.03, corridorCenterZ);
     scene.add(rightUpperRed);
 
-    // ====== DISPLAY ALCOVES — Fashion Model Showcases ======
+    // Warm Golden Amber strip directly adjacent along ceiling edge
+    const upperYellowGeo = new THREE.BoxGeometry(0.07, 0.05, corridorLength);
+    const leftUpperYellow = new THREE.Mesh(upperYellowGeo, yellowNeonMat);
+    leftUpperYellow.position.set(-3.55, ceilingY - 0.05, corridorCenterZ);
+    scene.add(leftUpperYellow);
+
+    const rightUpperYellow = new THREE.Mesh(upperYellowGeo, yellowNeonMat);
+    rightUpperYellow.position.set(3.55, ceilingY - 0.05, corridorCenterZ);
+    scene.add(rightUpperYellow);
+
+    // Overhead Transverse Cross-Beams & Horizontal Light Bars
+    // Spaced regularly down the corridor matching the reference perspective
+    const beamPositionsZ = [
+      9.5, 3.5, -2.5, -8.5, -14.5, -20.5, -26.5, -32.5, -38.5, -44.5, -50.5, -56.5, -62.5, -68.5, -74.5,
+    ];
+
+    const crossBeamMat = new THREE.MeshStandardMaterial({
+      color: 0x1d1510,
+      roughness: 0.45,
+      metalness: 0.25,
+    });
+    const beamLightMat = new THREE.MeshBasicMaterial({
+      color: 0xffd37a, // Warm golden white ceiling light
+    });
+    const beamCoreMat = new THREE.MeshBasicMaterial({
+      color: 0xfff3d6, // Inner bright core
+    });
+
+    beamPositionsZ.forEach((bz) => {
+      // Main cross beam spanning between walls
+      const beamGeo = new THREE.BoxGeometry(7.4, 0.22, 0.45);
+      const beam = new THREE.Mesh(beamGeo, crossBeamMat);
+      beam.position.set(0, ceilingY - 0.11, bz);
+      scene.add(beam);
+
+      // Underside warm golden light bar
+      const beamLightGeo = new THREE.BoxGeometry(5.6, 0.04, 0.22);
+      const beamLight = new THREE.Mesh(beamLightGeo, beamLightMat);
+      beamLight.position.set(0, ceilingY - 0.225, bz);
+      scene.add(beamLight);
+
+      // Core bright light strip
+      const beamCoreGeo = new THREE.BoxGeometry(4.8, 0.02, 0.12);
+      const beamCore = new THREE.Mesh(beamCoreGeo, beamCoreMat);
+      beamCore.position.set(0, ceilingY - 0.235, bz);
+      scene.add(beamCore);
+
+      // Red neon side accent blocks on beam ends
+      const redAccentGeo = new THREE.BoxGeometry(0.7, 0.05, 0.22);
+      const leftRedAccent = new THREE.Mesh(redAccentGeo, redNeonMat);
+      leftRedAccent.position.set(-3.2, ceilingY - 0.22, bz);
+      scene.add(leftRedAccent);
+
+      const rightRedAccent = new THREE.Mesh(redAccentGeo, redNeonMat);
+      rightRedAccent.position.set(3.2, ceilingY - 0.22, bz);
+      scene.add(rightRedAccent);
+    });
+
+    // 8. Architectural Wall Pilasters / Panels between Displays
+    // Closes the corridor into an authentic luxury gallery (no empty black void)
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0x150f0c,
+      roughness: 0.65,
+      metalness: 0.2,
+    });
+    const wallSegmentsZ = [-5.0, -23.0, -41.0, -59.0, -73.0];
+    wallSegmentsZ.forEach((wz) => {
+      const pilasterGeo = new THREE.BoxGeometry(0.4, 4.9, 3.2);
+      const leftP = new THREE.Mesh(pilasterGeo, wallMat);
+      leftP.position.set(-4.2, 0.35, wz);
+      scene.add(leftP);
+
+      const rightP = new THREE.Mesh(pilasterGeo, wallMat);
+      rightP.position.set(4.2, 0.35, wz);
+      scene.add(rightP);
+    });
+
+    // 9. High-Fashion Display Vitrines (Alcoves) with Models
+    const textureLoader = new THREE.TextureLoader();
     const alcoves: { mesh: THREE.Object3D; product: ProductItem }[] = [];
 
-    // Helper: create label texture
-    const createLabelTexture = (title: string, subtitle: string = 'EXPLORE →') => {
+    // Helper: Canvas texture for luxury typography ("MEN", "WOMEN", "EXPLORE →")
+    const createSignTexture = (title: string, subtitle: string = 'EXPLORE →') => {
       const canvas = document.createElement('canvas');
       canvas.width = 512;
-      canvas.height = 200;
+      canvas.height = 256;
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // Title
-        ctx.font = '500 56px serif';
+
+        // Luxury serif title in gold-white
+        ctx.font = '500 50px "Cormorant Garamond", Georgia, serif';
         ctx.fillStyle = '#ffffff';
         ctx.textAlign = 'center';
-        ctx.shadowColor = 'rgba(255, 200, 100, 0.5)';
-        ctx.shadowBlur = 12;
-        ctx.fillText(title, 256, 90);
+        ctx.letterSpacing = '6px';
+        ctx.shadowColor = 'rgba(255, 220, 160, 0.8)';
+        ctx.shadowBlur = 14;
+        ctx.fillText(title.toUpperCase(), 256, 120);
+
         // Subtitle
-        ctx.font = '300 18px sans-serif';
-        ctx.fillStyle = '#e8c875';
-        ctx.shadowBlur = 6;
-        ctx.fillText(subtitle, 256, 135);
+        ctx.font = '400 20px "Montserrat", sans-serif';
+        ctx.fillStyle = '#ffcf77';
+        ctx.letterSpacing = '4px';
+        ctx.shadowBlur = 8;
+        ctx.fillText(subtitle, 256, 175);
       }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.needsUpdate = true;
-      return tex;
+      return new THREE.CanvasTexture(canvas);
     };
 
     SHOWCASE_PAIRS.forEach((pair) => {
       const zPos = pair.zDistance;
 
-      const items: { item: ProductItem; xPos: number; side: 'left' | 'right' }[] = [
-        { item: pair.leftItem, xPos: -3.6, side: 'left' },
-        { item: pair.rightItem, xPos: 3.6, side: 'right' },
+      const items = [
+        { item: pair.leftItem, x: -4.3, side: 'left' },
+        { item: pair.rightItem, x: 4.3, side: 'right' },
       ];
 
-      items.forEach(({ item, xPos, side }) => {
-        const group = new THREE.Group();
-        group.position.set(xPos, floorY + 0.01, zPos);
+      items.forEach(({ item, x, side }) => {
+        const alcoveGroup = new THREE.Group();
+        // Position vitrine so top touches ceiling (y = 2.8) and bottom touches floor (y = -2.1)
+        alcoveGroup.position.set(x, 0.35, zPos);
 
-        // Display dimensions — LARGE to dominate the viewport
-        const displayW = 3.2;
-        const displayH = 4.2;
-        const displayD = 0.9;
-        const frameThick = 0.18;
+        const boxWidth = 3.4;
+        const boxHeight = 4.9;
+        const boxDepth = 1.3;
 
-        // ---- Outer dark frame box (4 sides) ----
+        const frameMat = new THREE.MeshStandardMaterial({
+          color: 0x1f1611,
+          roughness: 0.4,
+          metalness: 0.3,
+        });
+
+        const frameThickness = 0.22;
+
         // Top frame
-        const topF = new THREE.Mesh(
-          new THREE.BoxGeometry(displayW, frameThick, displayD),
+        const topFrame = new THREE.Mesh(
+          new THREE.BoxGeometry(boxWidth, frameThickness, boxDepth),
           frameMat
         );
-        topF.position.set(0, displayH - frameThick / 2, 0);
-        group.add(topF);
+        topFrame.position.set(0, boxHeight / 2 - frameThickness / 2, 0);
+        alcoveGroup.add(topFrame);
 
         // Bottom frame / base
-        const bottomF = new THREE.Mesh(
-          new THREE.BoxGeometry(displayW, frameThick * 1.5, displayD),
+        const bottomFrame = new THREE.Mesh(
+          new THREE.BoxGeometry(boxWidth, frameThickness, boxDepth),
           frameMat
         );
-        bottomF.position.set(0, frameThick * 0.75, 0);
-        group.add(bottomF);
+        bottomFrame.position.set(0, -boxHeight / 2 + frameThickness / 2, 0);
+        alcoveGroup.add(bottomFrame);
 
         // Side frames
-        const sideGeo = new THREE.BoxGeometry(frameThick, displayH, displayD);
-        const outerSide = new THREE.Mesh(sideGeo, frameMat);
-        outerSide.position.set(
-          side === 'left' ? -displayW / 2 + frameThick / 2 : displayW / 2 - frameThick / 2,
-          displayH / 2,
+        const sideFrameGeo = new THREE.BoxGeometry(frameThickness, boxHeight, boxDepth);
+        const outerSideFrame = new THREE.Mesh(sideFrameGeo, frameMat);
+        outerSideFrame.position.set(
+          side === 'left' ? -boxWidth / 2 + frameThickness / 2 : boxWidth / 2 - frameThickness / 2,
+          0,
           0
         );
-        group.add(outerSide);
+        alcoveGroup.add(outerSideFrame);
 
-        const innerSide = new THREE.Mesh(sideGeo, frameMat);
-        innerSide.position.set(
-          side === 'left' ? displayW / 2 - frameThick / 2 : -displayW / 2 + frameThick / 2,
-          displayH / 2,
+        const innerSideFrame = new THREE.Mesh(sideFrameGeo, frameMat);
+        innerSideFrame.position.set(
+          side === 'left' ? boxWidth / 2 - frameThickness / 2 : -boxWidth / 2 + frameThickness / 2,
+          0,
           0
         );
-        group.add(innerSide);
+        alcoveGroup.add(innerSideFrame);
 
-        // ---- Golden glow border (inner perimeter) ----
-        const innerW = displayW - frameThick * 2;
-        const innerH = displayH - frameThick * 2.5;
-        const borderThick = 0.035;
-        const borderFrontZ = displayD / 2 - 0.02;
+        // Glowing Golden Border framing the display window
+        const borderLightMat = new THREE.MeshBasicMaterial({
+          color: 0xffbe44,
+        });
+        const innerW = boxWidth - frameThickness * 2;
+        const innerH = boxHeight - frameThickness * 2;
+        const lightThickness = 0.045;
+        const lightZ = boxDepth / 2 - 0.04;
 
-        // Top gold
-        group.add(
-          (() => {
-            const m = new THREE.Mesh(
-              new THREE.BoxGeometry(innerW + 0.1, borderThick, borderThick),
-              goldBorderMat
-            );
-            m.position.set(0, displayH - frameThick - borderThick / 2, borderFrontZ);
-            return m;
-          })()
+        // Top border light
+        const tLight = new THREE.Mesh(
+          new THREE.BoxGeometry(innerW, lightThickness, lightThickness),
+          borderLightMat
         );
-        // Bottom gold
-        group.add(
-          (() => {
-            const m = new THREE.Mesh(
-              new THREE.BoxGeometry(innerW + 0.1, borderThick, borderThick),
-              goldBorderMat
-            );
-            m.position.set(0, frameThick * 1.5 + borderThick / 2, borderFrontZ);
-            return m;
-          })()
-        );
-        // Left gold
-        group.add(
-          (() => {
-            const m = new THREE.Mesh(
-              new THREE.BoxGeometry(borderThick, innerH + 0.1, borderThick),
-              goldBorderMat
-            );
-            m.position.set(-innerW / 2, displayH / 2 + frameThick * 0.25 / 2, borderFrontZ);
-            return m;
-          })()
-        );
-        // Right gold
-        group.add(
-          (() => {
-            const m = new THREE.Mesh(
-              new THREE.BoxGeometry(borderThick, innerH + 0.1, borderThick),
-              goldBorderMat
-            );
-            m.position.set(innerW / 2, displayH / 2 + frameThick * 0.25 / 2, borderFrontZ);
-            return m;
-          })()
-        );
+        tLight.position.set(0, innerH / 2, lightZ);
+        alcoveGroup.add(tLight);
 
-        // ---- Ivory lightbox backdrop ----
-        const backdrop = new THREE.Mesh(
-          new THREE.PlaneGeometry(innerW, innerH),
-          ivoryMat
+        // Bottom border light
+        const bLight = new THREE.Mesh(
+          new THREE.BoxGeometry(innerW, lightThickness, lightThickness),
+          borderLightMat
         );
-        backdrop.position.set(0, displayH / 2 + frameThick * 0.25 / 2, -displayD / 2 + 0.03);
-        group.add(backdrop);
+        bLight.position.set(0, -innerH / 2, lightZ);
+        alcoveGroup.add(bLight);
 
-        // ---- Fashion model photograph ----
-        const photoW = innerW * 0.92;
-        const photoH = innerH * 0.94;
-        const photoGeo = new THREE.PlaneGeometry(photoW, photoH);
-        const photoMat = new THREE.MeshBasicMaterial({
+        // Left border light
+        const lLight = new THREE.Mesh(
+          new THREE.BoxGeometry(lightThickness, innerH, lightThickness),
+          borderLightMat
+        );
+        lLight.position.set(-innerW / 2, 0, lightZ);
+        alcoveGroup.add(lLight);
+
+        // Right border light
+        const rLight = new THREE.Mesh(
+          new THREE.BoxGeometry(lightThickness, innerH, lightThickness),
+          borderLightMat
+        );
+        rLight.position.set(innerW / 2, 0, lightZ);
+        alcoveGroup.add(rLight);
+
+        // Warm Ivory Lightbox Backdrop
+        const backdropGeo = new THREE.PlaneGeometry(innerW, innerH);
+        const backdropMat = new THREE.MeshBasicMaterial({
+          color: 0xfff4e6,
+        });
+        const backdrop = new THREE.Mesh(backdropGeo, backdropMat);
+        backdrop.position.set(0, 0, -boxDepth / 2 + 0.05);
+        alcoveGroup.add(backdrop);
+
+        // Model Photograph Plane
+        const modelGeo = new THREE.PlaneGeometry(2.65, 3.95);
+        const modelMat = new THREE.MeshBasicMaterial({
           color: 0xffffff,
           transparent: true,
+          opacity: 0.98,
         });
 
         textureLoader.load(
@@ -423,206 +416,228 @@ export default function TunnelCanvas({
           (tex) => {
             tex.colorSpace = THREE.SRGBColorSpace;
             tex.minFilter = THREE.LinearMipmapLinearFilter;
-            tex.magFilter = THREE.LinearFilter;
-            photoMat.map = tex;
-            photoMat.needsUpdate = true;
+            modelMat.map = tex;
+            modelMat.needsUpdate = true;
           },
           undefined,
-          (err) => console.warn('Texture load error:', item.image, err)
+          (err) => {
+            console.warn(`Failed loading model image ${item.image}`, err);
+          }
         );
 
-        const photoMesh = new THREE.Mesh(photoGeo, photoMat);
-        photoMesh.position.set(0, displayH / 2 + frameThick * 0.25 / 2, -displayD / 2 + 0.08);
-        group.add(photoMesh);
+        const modelMesh = new THREE.Mesh(modelGeo, modelMat);
+        modelMesh.position.set(0, -0.05, -boxDepth / 2 + 0.12);
+        alcoveGroup.add(modelMesh);
 
-        // ---- Spotlight inside alcove ----
-        const spot = new THREE.SpotLight(0xfff0dd, 4.0, 8, Math.PI / 3, 0.5);
-        spot.position.set(0, displayH - 0.3, displayD / 2 + 0.5);
-        spot.target = photoMesh;
-        group.add(spot);
+        // Focused Interior Spotlight
+        const alcoveSpot = new THREE.SpotLight(0xffecd0, 4.0);
+        alcoveSpot.position.set(0, innerH / 2 - 0.2, 0.5);
+        alcoveSpot.target = modelMesh;
+        alcoveSpot.angle = Math.PI / 3;
+        alcoveSpot.penumbra = 0.5;
+        alcoveSpot.distance = 7;
+        alcoveGroup.add(alcoveSpot);
 
-        // ---- Label sign ----
-        const labelTex = createLabelTexture(item.category, 'EXPLORE →');
-        const labelGeo = new THREE.PlaneGeometry(1.8, 0.7);
-        const labelMat = new THREE.MeshBasicMaterial({
-          map: labelTex,
+        // Vitrine Serif Signage ("MEN", "WOMEN", etc.)
+        const signTex = createSignTexture(item.category, 'EXPLORE →');
+        const signGeo = new THREE.PlaneGeometry(2.1, 1.05);
+        const signMat = new THREE.MeshBasicMaterial({
+          map: signTex,
           transparent: true,
+          opacity: 0.95,
           blending: THREE.AdditiveBlending,
-          opacity: 0.9,
         });
-        const labelMesh = new THREE.Mesh(labelGeo, labelMat);
-        labelMesh.position.set(0, 1.2, displayD / 2 + 0.01);
-        group.add(labelMesh);
+        const signMesh = new THREE.Mesh(signGeo, signMat);
+        signMesh.position.set(0, -0.95, boxDepth / 2 - 0.02);
+        alcoveGroup.add(signMesh);
 
-        // ---- Red accent strip at alcove top edge ----
-        const alcoveRedGeo = new THREE.BoxGeometry(displayW + 0.1, 0.03, 0.03);
-        const alcoveRed = new THREE.Mesh(alcoveRedGeo, redEmissiveMat);
-        alcoveRed.position.set(0, displayH + 0.02, displayD / 2);
-        group.add(alcoveRed);
-
-        // ---- Amber accent strip at alcove base ----
-        const alcoveAmberGeo = new THREE.BoxGeometry(displayW + 0.1, 0.025, 0.025);
-        const alcoveAmber = new THREE.Mesh(alcoveAmberGeo, amberEmissiveMat);
-        alcoveAmber.position.set(0, 0.02, displayD / 2);
-        group.add(alcoveAmber);
-
-        // ---- Interactive hit plane ----
-        const hitGeo = new THREE.PlaneGeometry(displayW, displayH);
-        const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-        const hitPlane = new THREE.Mesh(hitGeo, hitMat);
-        hitPlane.position.set(0, displayH / 2, displayD / 2 + 0.05);
+        // Interactive Raycast Hit Plane
+        const hitPlaneGeo = new THREE.PlaneGeometry(innerW, innerH);
+        const hitPlaneMat = new THREE.MeshBasicMaterial({
+          visible: false,
+        });
+        const hitPlane = new THREE.Mesh(hitPlaneGeo, hitPlaneMat);
+        hitPlane.position.set(0, 0, boxDepth / 2);
         (hitPlane as any).productData = item;
-        group.add(hitPlane);
+        alcoveGroup.add(hitPlane);
 
-        scene.add(group);
+        scene.add(alcoveGroup);
         alcoves.push({ mesh: hitPlane, product: item });
       });
     });
 
     alcovesRef.current = alcoves;
 
-    // ====== VANISHING POINT PORTAL ======
+    // 10. Golden Vanishing Point Portal Archway
     const portalGroup = new THREE.Group();
-    portalGroup.position.set(0, floorY + tunnelHeight / 2, -82);
+    portalGroup.position.set(0, 0.35, -80.5);
 
-    // Warm glowing frame
-    const pW = 4.5, pH = 3.8, pT = 0.08;
-    const pMat = new THREE.MeshStandardMaterial({
-      color: 0xdaa520,
-      emissive: 0xdaa520,
-      emissiveIntensity: 0.4,
+    const portalW = 5.2;
+    const portalH = 4.6;
+    const portalLightBorderMat = new THREE.MeshBasicMaterial({
+      color: 0xffb733,
     });
-    // Top
-    portalGroup.add((() => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(pW, pT, pT), pMat);
-      m.position.set(0, pH / 2, 0);
-      return m;
-    })());
-    // Bottom
-    portalGroup.add((() => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(pW, pT, pT), pMat);
-      m.position.set(0, -pH / 2, 0);
-      return m;
-    })());
-    // Left
-    portalGroup.add((() => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(pT, pH, pT), pMat);
-      m.position.set(-pW / 2, 0, 0);
-      return m;
-    })());
-    // Right
-    portalGroup.add((() => {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(pT, pH, pT), pMat);
-      m.position.set(pW / 2, 0, 0);
-      return m;
-    })());
+    const pThickness = 0.12;
 
-    // VASTRAA text sign
+    // Portal glowing outline
+    const pTop = new THREE.Mesh(new THREE.BoxGeometry(portalW, pThickness, pThickness), portalLightBorderMat);
+    pTop.position.set(0, portalH / 2, 0);
+    portalGroup.add(pTop);
+
+    const pBottom = new THREE.Mesh(new THREE.BoxGeometry(portalW, pThickness, pThickness), portalLightBorderMat);
+    pBottom.position.set(0, -portalH / 2, 0);
+    portalGroup.add(pBottom);
+
+    const pLeft = new THREE.Mesh(new THREE.BoxGeometry(pThickness, portalH, pThickness), portalLightBorderMat);
+    pLeft.position.set(-portalW / 2, 0, 0);
+    portalGroup.add(pLeft);
+
+    const pRight = new THREE.Mesh(new THREE.BoxGeometry(pThickness, portalH, pThickness), portalLightBorderMat);
+    pRight.position.set(portalW / 2, 0, 0);
+    portalGroup.add(pRight);
+
+    // Glowing VASTRAA portal logo
     const portalCanvas = document.createElement('canvas');
     portalCanvas.width = 512;
     portalCanvas.height = 512;
     const pCtx = portalCanvas.getContext('2d');
     if (pCtx) {
       pCtx.clearRect(0, 0, 512, 512);
-      pCtx.fillStyle = '#ffe0a0';
-      pCtx.font = '400 48px serif';
+      pCtx.fillStyle = '#ffeed6';
+      pCtx.font = '400 48px "Cormorant Garamond", serif';
       pCtx.textAlign = 'center';
-      pCtx.shadowColor = 'rgba(255, 170, 0, 0.8)';
-      pCtx.shadowBlur = 20;
+      pCtx.letterSpacing = '8px';
+      pCtx.shadowColor = 'rgba(255, 180, 50, 0.9)';
+      pCtx.shadowBlur = 18;
       pCtx.fillText('VASTRAA', 256, 230);
-      pCtx.font = '300 16px sans-serif';
-      pCtx.fillStyle = '#ddaa44';
+
+      pCtx.font = '300 18px "Montserrat", sans-serif';
+      pCtx.fillStyle = '#ffb733';
+      pCtx.letterSpacing = '5px';
       pCtx.shadowBlur = 10;
-      pCtx.fillText('WEAR YOUR STORY', 256, 275);
+      pCtx.fillText('WEAR YOUR STORY', 256, 280);
     }
     const portalTex = new THREE.CanvasTexture(portalCanvas);
-    const portalSign = new THREE.Mesh(
-      new THREE.PlaneGeometry(3.2, 3.2),
-      new THREE.MeshBasicMaterial({
-        map: portalTex,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-      })
-    );
-    portalSign.position.set(0, 0, 0.05);
-    portalGroup.add(portalSign);
-
-    // Dark backing
-    portalGroup.add((() => {
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(pW - 0.2, pH - 0.2),
-        new THREE.MeshBasicMaterial({ color: 0x110d08 })
-      );
-      m.position.set(0, 0, -0.02);
-      return m;
-    })());
+    const portalSignMat = new THREE.MeshBasicMaterial({
+      map: portalTex,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+    });
+    const portalSignMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 3.6), portalSignMat);
+    portalSignMesh.position.set(0, 0, 0.05);
+    portalGroup.add(portalSignMesh);
 
     scene.add(portalGroup);
 
-    // ====== INTERACTION ======
+    // 11. Subtle Ambient Floating Dust Particles (High Fashion Atmosphere)
+    const particleCount = 100;
+    const particleGeo = new THREE.BufferGeometry();
+    const particlePositions = new Float32Array(particleCount * 3);
+    for (let i = 0; i < particleCount * 3; i += 3) {
+      particlePositions[i] = (Math.random() - 0.5) * 6; // X
+      particlePositions[i + 1] = (Math.random() - 0.5) * 4; // Y
+      particlePositions[i + 2] = 10 - Math.random() * 85; // Z
+    }
+    particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+    const particleMat = new THREE.PointsMaterial({
+      color: 0xffd999,
+      size: 0.045,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+    });
+    const particles = new THREE.Points(particleGeo, particleMat);
+    scene.add(particles);
+
+    // 12. Interactive Raycaster for Clicks and Hovers
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    const onPointerDown = (e: MouseEvent) => {
+    const onPointerDown = (event: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
       raycaster.setFromCamera(mouse, camera);
-      const hitMeshes = alcovesRef.current.map((a) => a.mesh);
-      const intersects = raycaster.intersectObjects(hitMeshes);
+      const interactiveMeshes = alcovesRef.current.map((a) => a.mesh);
+      const intersects = raycaster.intersectObjects(interactiveMeshes);
+
       if (intersects.length > 0) {
-        const data = (intersects[0].object as any).productData;
-        if (data) onSelectProduct(data);
+        const hit = intersects[0].object as any;
+        if (hit.productData) {
+          onSelectProduct(hit.productData);
+        }
       }
     };
 
-    const onPointerMove = (e: MouseEvent) => {
+    const onPointerMove = (event: MouseEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
       raycaster.setFromCamera(mouse, camera);
-      const hitMeshes = alcovesRef.current.map((a) => a.mesh);
-      const intersects = raycaster.intersectObjects(hitMeshes);
-      renderer.domElement.style.cursor = intersects.length > 0 ? 'pointer' : 'default';
+      const interactiveMeshes = alcovesRef.current.map((a) => a.mesh);
+      const intersects = raycaster.intersectObjects(interactiveMeshes);
+
+      if (intersects.length > 0) {
+        document.body.style.cursor = 'pointer';
+        const hit = intersects[0].object as any;
+        hoveredProductRef.current = hit.productData || null;
+      } else {
+        document.body.style.cursor = 'default';
+        hoveredProductRef.current = null;
+      }
     };
 
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
 
-    // ====== RESIZE ======
+    // 13. Window Resize Handler
     const onResize = () => {
+      if (!container || !rendererRef.current || !cameraRef.current) return;
       const w = container.clientWidth || window.innerWidth;
       const h = container.clientHeight || window.innerHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      cameraRef.current.aspect = w / h;
+      cameraRef.current.updateProjectionMatrix();
+      rendererRef.current.setSize(w, h);
     };
+
     window.addEventListener('resize', onResize);
 
-    // ====== ANIMATION ======
-    let animId: number;
+    // 14. Smooth Animation Loop
+    let animationFrameId: number;
 
     const animate = () => {
-      animId = requestAnimationFrame(animate);
+      animationFrameId = requestAnimationFrame(animate);
 
-      // Smooth lerp camera Z
-      currentCamZ.current += (targetCamZ.current - currentCamZ.current) * 0.07;
-      camera.position.set(0, 0.6, currentCamZ.current);
-      camera.lookAt(0, 0.4, camera.position.z - 40);
+      // Smooth lerp camera Z position (fluid scroll dampening)
+      currentCamZ.current += (targetCamZ.current - currentCamZ.current) * 0.08;
+      camera.position.z = currentCamZ.current;
 
+      // Keep camera level and centered
+      camera.position.x = 0;
+      camera.position.y = 0.15;
+      camera.lookAt(0, 0.15, camera.position.z - 40);
+
+      // Gentle floating particles motion
+      particles.rotation.y += 0.0003;
+
+      // Render
       renderer.render(scene, camera);
     };
 
     animate();
 
-    // ====== CLEANUP ======
+    // 15. Cleanup
     return () => {
-      cancelAnimationFrame(animId);
+      cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', onResize);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
+
       renderer.dispose();
       scene.clear();
+      document.body.style.cursor = 'default';
     };
   }, [onSelectProduct]);
 
