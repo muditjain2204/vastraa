@@ -28,7 +28,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={}
+      className={`${cormorant.variable} ${montserrat.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-[#0a0705] text-[#f5f1eb] font-sans overflow-x-hidden selection:bg-[#ffaa00] selection:text-black">
         {children}
